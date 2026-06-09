@@ -666,6 +666,8 @@ window.mountApp = function(email, name) {
   document.getElementById('user-chip').style.display = 'flex';
   const sel = document.getElementById('qCoord');
   if (sel) { for (let i=0;i<sel.options.length;i++) { if(sel.options[i].text.toLowerCase().includes((name||'').split(' ')[0].toLowerCase())){sel.selectedIndex=i;break;} } }
+  // Trigger initial render after login
+  if (typeof go === 'function') go('queue');
 };
 
 window.signOut = async function() {
