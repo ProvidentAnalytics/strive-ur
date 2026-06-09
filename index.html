@@ -590,110 +590,123 @@ input.fme:focus,select.fme:focus,textarea.fme:focus{border-color:#f97316!importa
 </div>
 </div>
 
-<!-- ── MICROSOFT AUTH (MSAL) ── -->
+<!-- ── MICROSOFT AUTH — MSAL v3 (matches CTM implementation) ── -->
+<script src="https://cdn.jsdelivr.net/npm/@azure/msal-browser@3.10.0/lib/msal-browser.min.js"></script>
+<script>if(!window.msal){document.write('<script src="https://unpkg.com/@azure/msal-browser@3.10.0/lib/msal-browser.min.js"><\/script>');}</script>
 <script src="config.js"></script>
-<script src="https://alcdn.msauth.net/browser/2.38.3/js/msal-browser.min.js"></script>
 <script>
-// ── Auth configuration ──────────────────────────────────────────────
+(function(){
 const ALLOWED_DOMAINS = ['striverecovery.com','providenthcc.com','gshealthcarellc.com'];
 const AUTH_SESSION_KEY = 'strive_ur_user';
+const SCOPES = ['openid','profile','email','User.Read'];
 
-// AZURE_CONFIG loaded from config.js
-const _clientId = (typeof AZURE_CONFIG !== 'undefined') ? AZURE_CONFIG.CLIENT_ID : '00000000-0000-0000-0000-000000000000';
-const _tenantId = (typeof AZURE_CONFIG !== 'undefined') ? AZURE_CONFIG.TENANT_ID : 'common';
+// Loaded from config.js (injected by GitHub Actions from repo secrets)
+const _clientId = (typeof AZURE_CONFIG !== 'undefined' && AZURE_CONFIG.CLIENT_ID !== 'YOUR_CLIENT_ID_HERE') ? AZURE_CONFIG.CLIENT_ID : '';
+const _tenantId = (typeof AZURE_CONFIG !== 'undefined' && AZURE_CONFIG.TENANT_ID !== 'YOUR_TENANT_ID_HERE') ? AZURE_CONFIG.TENANT_ID : 'common';
 
-const msalConfig = {
+const msalCfg = {
   auth: {
-    clientId: _clientId,
-    authority: 'https://login.microsoftonline.com/' + _tenantId,
-    redirectUri: window.location.origin + window.location.pathname
+    clientId: _clientId || 'debd63be-2397-4d6e-adb1-381574e7352b',
+    authority: 'https://login.microsoftonline.com/' + (_tenantId !== 'common' ? _tenantId : '063ab74f-56d1-429a-b96d-a24a572025de'),
+    redirectUri: window.location.origin + window.location.pathname,
   },
-  cache: { cacheLocation: 'sessionStorage', storeAuthStateInCookie: false }
+  cache: { cacheLocation: 'localStorage' }
 };
 
-let msalInstance = null;
-try { msalInstance = new msal.PublicClientApplication(msalConfig); } catch(e) {}
+let _inst = null;
 
-const loginScopes = { scopes: ['openid','profile','email','User.Read'] };
-
-function loginWithMicrosoft() {
-  // ── Dev/demo bypass: if no real client ID configured, use email prompt ──
-  if (!msalInstance || _clientId === 'YOUR_CLIENT_ID_HERE' || _clientId === '00000000-0000-0000-0000-000000000000') {
-    showEmailFallback();
-    return;
-  }
-  showSpinner(true);
-  msalInstance.loginPopup(loginScopes).then(function(resp) {
-    var email = (resp.account.username || '').toLowerCase();
-    handleAuthResult(email, resp.account.name || email);
-  }).catch(function(err) {
-    showSpinner(false);
-    showLoginError('Sign-in was cancelled or failed. Please try again.');
-    console.error(err);
-  });
+async function getInst() {
+  if (_inst) return _inst;
+  _inst = new msal.PublicClientApplication(msalCfg);
+  if (typeof _inst.initialize === 'function') await _inst.initialize();
+  return _inst;
 }
 
+window.loginWithMicrosoft = async function() {
+  showSpinner(true);
+  try {
+    const inst = await getInst();
+    // Try silent SSO first
+    let resp;
+    try {
+      resp = await inst.ssoSilent({ scopes: SCOPES });
+    } catch(e) {
+      // Silent failed — show popup
+      resp = await inst.loginPopup({ scopes: SCOPES });
+    }
+    const email = (resp.account.username || '').toLowerCase();
+    const name  = resp.account.name || email;
+    handleAuthResult(email, name);
+  } catch(err) {
+    showSpinner(false);
+    if (err && err.errorCode !== 'user_cancelled') {
+      showLoginError('Sign-in failed: ' + (err.message || err.errorCode || 'unknown error'));
+    }
+    console.error('[MSAL]', err);
+  }
+};
+
 function handleAuthResult(email, name) {
-  var domain = email.split('@')[1] || '';
+  const domain = (email.split('@')[1] || '').toLowerCase();
   if (!ALLOWED_DOMAINS.includes(domain)) {
     showSpinner(false);
     showLoginError('Access denied. Only striverecovery.com, providenthcc.com, and gshealthcarellc.com accounts are allowed.');
-    if (msalInstance) { try { msalInstance.logoutPopup(); } catch(e){} }
     return;
   }
-  sessionStorage.setItem(AUTH_SESSION_KEY, JSON.stringify({ email: email, name: name, domain: domain, ts: Date.now() }));
+  sessionStorage.setItem(AUTH_SESSION_KEY, JSON.stringify({ email, name, domain, ts: Date.now() }));
   mountApp(email, name);
 }
 
-function mountApp(email, name) {
+window.mountApp = function(email, name) {
   document.getElementById('login-screen').classList.add('hidden');
-  // Populate user chip
-  var initials = name.split(' ').map(function(w){return w[0]||'';}).slice(0,2).join('').toUpperCase() || email[0].toUpperCase();
-  var chipName = name.split(' ')[0] || email;
+  const initials = (name||email).split(' ').map(w=>w[0]||'').slice(0,2).join('').toUpperCase() || '?';
+  const chipName = (name||email).split(' ')[0];
   document.getElementById('user-chip-av').textContent = initials;
-  document.getElementById('user-chip-name').textContent = chipName + ' (' + email.split('@')[1] + ')';
+  document.getElementById('user-chip-name').textContent = chipName + ' (' + (email.split('@')[1]||email) + ')';
   document.getElementById('user-chip').style.display = 'flex';
-  // Pre-select coordinator dropdown if name matches
-  var sel = document.getElementById('qCoord');
-  if (sel) {
-    for (var i = 0; i < sel.options.length; i++) {
-      if (sel.options[i].text.toLowerCase().indexOf(name.split(' ')[0].toLowerCase()) !== -1) {
-        sel.selectedIndex = i; break;
-      }
-    }
-  }
-}
+  const sel = document.getElementById('qCoord');
+  if (sel) { for (let i=0;i<sel.options.length;i++) { if(sel.options[i].text.toLowerCase().includes((name||'').split(' ')[0].toLowerCase())){sel.selectedIndex=i;break;} } }
+};
 
-function signOut() {
+window.signOut = async function() {
   sessionStorage.removeItem(AUTH_SESSION_KEY);
-  if (msalInstance) { try { msalInstance.logoutPopup().catch(function(){}); } catch(e){} }
   document.getElementById('login-screen').classList.remove('hidden');
   document.getElementById('user-chip').style.display = 'none';
-}
+  try { const inst = await getInst(); await inst.logoutPopup(); } catch(e) {}
+};
 
-function showLoginError(msg) {
-  var el = document.getElementById('login-error');
-  el.textContent = msg; el.style.display = 'block';
-}
+window.showLoginError = function(msg) {
+  const el = document.getElementById('login-error');
+  if(el){ el.textContent = msg; el.style.display = 'block'; }
+};
 function showSpinner(on) {
-  document.getElementById('login-spinner').style.display = on ? 'flex' : 'none';
-  document.getElementById('login-btn').style.display = on ? 'none' : 'flex';
+  const sp = document.getElementById('login-spinner');
+  const bt = document.getElementById('login-btn');
+  if(sp) sp.style.display = on ? 'flex' : 'none';
+  if(bt) bt.style.display = on ? 'none' : 'flex';
 }
 
-// ── Email-based fallback (used when MSAL client ID not yet configured) ──
-function showEmailFallback() {
-  var card = document.querySelector('.login-card');
-  card.innerHTML = '<div class="login-logo">STRIVE</div>'
-    + '<div class="login-sub">UR Intelligence Tracker</div>'
-    + '<div class="login-title">Enter your work email</div>'
-    + '<p class="login-desc" style="margin-bottom:18px">Microsoft SSO setup required for production.<br>For now, verify your email to continue.</p>'
-    + '<div class="login-error" id="login-error" style="display:none"></div>'
-    + '<input id="email-input" type="email" placeholder="you@striverecovery.com" style="width:100%;padding:11px 14px;border:1.5px solid #e2e8f0;border-radius:9px;font-size:14px;font-family:inherit;outline:none;margin-bottom:12px;transition:border .15s" onfocus="this.style.borderColor=\'#4BBDE8\'" onblur="this.style.borderColor=\'#e2e8f0\'">'
-    + '<button onclick="submitEmailFallback()" style="width:100%;padding:12px;background:#1B3A6B;color:#fff;border:none;border-radius:9px;font-size:14px;font-weight:700;cursor:pointer;font-family:inherit;transition:background .15s" onmouseover="this.style.background=\'#142d55\'" onmouseout="this.style.background=\'#1B3A6B\'">Continue</button>'
-    + '<div class="login-footer" style="margin-top:16px">Provident Analytics &middot; access restricted to org members</div>';
-}
-function submitEmailFallback() {
-  var email = (document.getElementById('email-input').value || '').trim().toLowerCase();
+// On load: restore session or check MSAL redirect
+window.addEventListener('DOMContentLoaded', async function() {
+  const saved = sessionStorage.getItem(AUTH_SESSION_KEY);
+  if (saved) {
+    try {
+      const u = JSON.parse(saved);
+      if (u && u.email && (Date.now() - u.ts) < 12*60*60*1000) { mountApp(u.email, u.name||u.email); return; }
+    } catch(e) {}
+    sessionStorage.removeItem(AUTH_SESSION_KEY);
+  }
+  // Handle redirect response (if popup was blocked and redirect was used)
+  try {
+    const inst = await getInst();
+    const resp = await inst.handleRedirectPromise();
+    if (resp && resp.account) { handleAuthResult((resp.account.username||'').toLowerCase(), resp.account.name||resp.account.username); }
+  } catch(e) { console.warn('[MSAL redirect]', e); }
+});
+
+// ── submitEmailFallback kept for completeness but no longer shown ──
+window.submitEmailFallback = function() {
+  var email = (document.getElementById('email-input')||{value:''}).value.trim().toLowerCase();
   var domain = email.split('@')[1] || '';
   if (!email || !email.includes('@')) { showLoginError('Please enter a valid email address.'); return; }
   if (!ALLOWED_DOMAINS.includes(domain)) {
@@ -702,32 +715,9 @@ function submitEmailFallback() {
   }
   var name = email.split('@')[0].replace(/[._]/g,' ').replace(/\b\w/g,function(c){return c.toUpperCase();});
   handleAuthResult(email, name);
-}
+};
 
-// ── On page load: check for existing session or MSAL redirect ──
-window.addEventListener('DOMContentLoaded', function() {
-  var saved = sessionStorage.getItem(AUTH_SESSION_KEY);
-  if (saved) {
-    try {
-      var u = JSON.parse(saved);
-      // Expire session after 12 hours
-      if (u && u.email && (Date.now() - u.ts) < 12 * 60 * 60 * 1000) {
-        mountApp(u.email, u.name || u.email);
-        return;
-      }
-    } catch(e) {}
-    sessionStorage.removeItem(AUTH_SESSION_KEY);
-  }
-  // Handle MSAL redirect response
-  if (msalInstance) {
-    msalInstance.handleRedirectPromise().then(function(resp) {
-      if (resp && resp.account) {
-        handleAuthResult((resp.account.username||'').toLowerCase(), resp.account.name||resp.account.username);
-      }
-    }).catch(function(){});
-  }
-  // Login screen stays visible by default (already shown)
-});
+})(); // end auth IIFE
 </script>
 
 <script>
