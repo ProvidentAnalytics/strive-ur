@@ -18,15 +18,28 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      # Inject Azure AD credentials from GitHub Variables into config.js
-      - name: Write config.js from GitHub Variables
+      # Inject Azure AD credentials into config.js via env vars (secrets-safe method)
+      - name: Inject Azure credentials into config.js
+        env:
+          CLIENT_ID: ${{ secrets.AZURE_CLIENT_ID }}
+          TENANT_ID: ${{ secrets.AZURE_TENANT_ID }}
         run: |
-          cat > config.js << EOF
-          const AZURE_CONFIG = {
-            CLIENT_ID: '${{ secrets.AZURE_CLIENT_ID }}',
-            TENANT_ID: '${{ secrets.AZURE_TENANT_ID }}',
-          };
-          EOF
+          python3 - <<'PYEOF'
+          import os
+          client_id = os.environ.get('CLIENT_ID', '')
+          tenant_id = os.environ.get('TENANT_ID', '')
+          content = f"const AZURE_CONFIG = {{\n  CLIENT_ID: '{client_id}',\n  TENANT_ID: '{tenant_id}',\n}};\n"
+          with open('config.js', 'w') as f:
+              f.write(content)
+          print(f"config.js written — CLIENT_ID length: {len(client_id)}, TENANT_ID length: {len(tenant_id)}")
+          PYEOF
+
+      # Verify config.js was written (lengths only, values stay masked)
+      - name: Verify config.js
+        run: |
+          echo "config.js contents (values masked):"
+          cat config.js | sed 's/\(CLIENT_ID.*\x27\).\{10,\}\(\x27\)/\1***\2/g'
+          echo "File size: $(wc -c < config.js) bytes"
 
       - uses: actions/configure-pages@v4
 
