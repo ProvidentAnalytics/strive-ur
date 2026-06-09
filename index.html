@@ -372,7 +372,10 @@ input.fme:focus,select.fme:focus,textarea.fme:focus{border-color:#f97316!importa
         <option>UR Director</option><option>Medical Director</option>
         <option>Clinical Team</option><option>Billing</option>
       </select>
-      <button class="btn" onclick="loadSharePointData()" title="Pull latest data from Sunwave SharePoint" style="display:flex;align-items:center;gap:5px;background:#f0f4f8;border:1px solid var(--border);color:var(--navy);font-weight:600;font-size:12px">⟳ Sync Sunwave</button>
+      <div style="display:flex;align-items:center;gap:6px">
+        <button id="sync-btn" class="btn" onclick="loadSharePointData()" title="Pull latest data from Sunwave SharePoint" style="display:flex;align-items:center;gap:5px;background:#f0f4f8;border:1px solid var(--border);color:var(--navy);font-weight:600;font-size:12px">⟳ Sync Sunwave</button>
+        <span id="sync-status" style="font-size:10px;color:var(--muted);font-family:'Space Mono',monospace;white-space:nowrap"></span>
+      </div>
       <button class="btn btn-primary" onclick="openAdd()">+ Add Record</button>
       <!-- User chip — shown after login -->
       <div class="user-chip" id="user-chip" style="display:none">
@@ -673,6 +676,9 @@ window.mountApp = function(email, name) {
   if (sel) { for (let i=0;i<sel.options.length;i++) { if(sel.options[i].text.toLowerCase().includes((name||'').split(' ')[0].toLowerCase())){sel.selectedIndex=i;break;} } }
   // Trigger initial render after login
   if (typeof go === 'function') go('queue');
+  // Restore last sync timestamp in topbar immediately
+  const lastTs = parseInt(localStorage.getItem(SYNC_TS_KEY)||'0');
+  if (lastTs) updateSyncStatus(lastTs, false);
   // Pull live Sunwave data from SharePoint in background (non-blocking)
   setTimeout(function(){ if(typeof window._loadSharePointAuto==='function') window._loadSharePointAuto(); }, 800);
 };
@@ -744,6 +750,45 @@ function xDate(v) {
 function xS(v){ return v==null?'':String(v).trim(); }
 function xN(v){ if(v===null||v===undefined||v==='')return 0; const n=parseFloat(v); return isNaN(n)?0:Math.round(n); }
 
+const SYNC_TS_KEY = 'strive_ur_last_sync';
+const SYNC_INTERVAL_MS = 30 * 60 * 1000; // 30 minutes
+let _syncTimer = null;
+
+function fmtSyncTime(ts) {
+  if (!ts) return '';
+  const d = new Date(ts);
+  const now = new Date();
+  const diffMin = Math.floor((now - d) / 60000);
+  const hh = String(d.getHours()).padStart(2,'0');
+  const mm = String(d.getMinutes()).padStart(2,'0');
+  const timeStr = hh + ':' + mm;
+  if (diffMin < 1)   return 'Synced just now · ' + timeStr;
+  if (diffMin < 60)  return 'Synced ' + diffMin + 'm ago · ' + timeStr;
+  const diffH = Math.floor(diffMin / 60);
+  return 'Synced ' + diffH + 'h ago · ' + timeStr;
+}
+
+function updateSyncStatus(ts, syncing) {
+  const el = document.getElementById('sync-status');
+  const btn = document.getElementById('sync-btn');
+  if (!el) return;
+  if (syncing) {
+    el.textContent = '⏳ Syncing…';
+    el.style.color = '#f59e0b';
+    if (btn) { btn.disabled = true; btn.style.opacity = '0.6'; }
+  } else {
+    el.textContent = fmtSyncTime(ts);
+    el.style.color = 'var(--muted)';
+    if (btn) { btn.disabled = false; btn.style.opacity = '1'; }
+  }
+}
+
+// Tick the "X min ago" display every minute
+setInterval(function() {
+  const ts = localStorage.getItem(SYNC_TS_KEY);
+  if (ts) updateSyncStatus(parseInt(ts), false);
+}, 60000);
+
 function showSyncBanner(msg, color) {
   let b = document.getElementById('sp-banner');
   if (!b) {
@@ -753,14 +798,15 @@ function showSyncBanner(msg, color) {
     document.body.appendChild(b);
   }
   b.textContent = msg;
-  b.style.background = color||'#1B3A6B';
+  b.style.background = color || '#1B3A6B';
   b.style.opacity = '1';
   clearTimeout(b._t);
-  if (color !== 'loading') b._t = setTimeout(()=>{ b.style.opacity='0'; }, 4000);
+  if (color !== '#1B3A6B') b._t = setTimeout(()=>{ b.style.opacity='0'; }, 4000);
 }
 
 window.loadSharePointData = async function() {
   try {
+    updateSyncStatus(null, true);
     showSyncBanner('⏳ Syncing Sunwave data from SharePoint…', '#1B3A6B');
     const inst = await getInst();
     let token;
@@ -871,11 +917,23 @@ window.loadSharePointData = async function() {
     if (typeof load === 'function') load();
     if (typeof go === 'function' && typeof cv !== 'undefined') go(cv);
 
+    const now = Date.now();
+    localStorage.setItem(SYNC_TS_KEY, now);
+    updateSyncStatus(now, false);
     showSyncBanner('✅ Synced ' + newRecords.length + ' records from Sunwave SharePoint', '#10b981');
     console.log('[SharePoint] merged', newRecords.length, 'records,', merged.length, 'total');
+
+    // Schedule next auto-refresh in 30 minutes
+    clearTimeout(_syncTimer);
+    _syncTimer = setTimeout(function(){ window.loadSharePointData(); }, SYNC_INTERVAL_MS);
+
   } catch(err) {
     console.error('[SharePoint]', err);
+    updateSyncStatus(parseInt(localStorage.getItem(SYNC_TS_KEY)||'0')||null, false);
     showSyncBanner('⚠️ SharePoint sync failed: ' + (err.message||'unknown'), '#ef4444');
+    // Retry in 5 minutes on failure
+    clearTimeout(_syncTimer);
+    _syncTimer = setTimeout(function(){ window.loadSharePointData(); }, 5 * 60 * 1000);
   }
 };
 
