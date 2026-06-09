@@ -790,6 +790,8 @@ setInterval(function() {
 }, 60000);
 
 function showSyncBanner(msg, color) {
+  // Silent background sync — only show errors, not success/loading
+  if (!color || color === '#1B3A6B' || color === '#10b981') return;
   let b = document.getElementById('sp-banner');
   if (!b) {
     b = document.createElement('div');
@@ -798,10 +800,10 @@ function showSyncBanner(msg, color) {
     document.body.appendChild(b);
   }
   b.textContent = msg;
-  b.style.background = color || '#1B3A6B';
+  b.style.background = color;
   b.style.opacity = '1';
   clearTimeout(b._t);
-  if (color !== '#1B3A6B') b._t = setTimeout(()=>{ b.style.opacity='0'; }, 4000);
+  b._t = setTimeout(()=>{ b.style.opacity='0'; }, 5000);
 }
 
 window.loadSharePointData = async function() {
